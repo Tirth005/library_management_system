@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions ---
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // ---------------- Admins ----------------
+    match /admins/{adminId} {
+      allow read: if request.auth != null;
+      allow write: if false; // Only manageable via console
+    }
+
+    // ---------------- Users ----------------
+    match /users/{userId} {
+      // Allow users to manage their own profile data (e.g. ProfilePage.dart)
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Admins can read all users
+      allow read: if isAdmin();
+    }
+
+    // ---------------- Books ----------------
+    match /books/{bookId} {
+      // Anyone can read book details
+      allow read: if request.auth != null;
+
+      // Users need permission to update availability when borrowing/returning
+      // Accessed in BooksPage.dart (_borrowBook and _returnBook)
+      allow update: if request.auth != null &&
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['available', 'lastBorrowed', 'lastBorrowedBy', 'lastReturned']));
+
+      // Admins have full write access
+      allow write: if isAdmin();
+    }
+
+    // ---------------- Book Transactions (Borrowed/Returned) ----------------
+    // Replaces 'borrowedBooks' and 'returnedBooks' from the template
+    match /bookTransactions/{transactionId} {
+      // Read: Users can see their own transactions (HomePage.dart, BooksPage.dart)
+      // AND users need to check if a book is borrowed by *anyone* (BooksPage.dart line 185)
+      allow read: if request.auth != null;
+
+      // Create: Users can create a borrow record (BooksPage.dart)
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid; // Basic check, could add field validation
+
+      // Update: Users can return books (BooksPage.dart)
+      allow update: if request.auth != null
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == request.auth.uid
+                    // Only allow updating status and returnDate for returns
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'returnDate']);
+
+      // Delete: Admins or Owner (if needed)
+      allow delete: if request.auth != null && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // ---------------- Activity Logs / Other ----------------
+    match /{path=**} {
+      allow read, write: if false; // Deny everything else by default
+    }
+  }
+}
